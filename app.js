@@ -1,4 +1,5 @@
 import * as db from './db.js';
+import { applyStyle } from './filters.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -37,13 +38,20 @@ function ctx2d(c) {
   return ctx;
 }
 
-function drawScaled(src, maxSide, w = src.naturalWidth || src.width, h = src.naturalHeight || src.height) {
+// bg：先鋪底色（讓透明的線稿變白底）
+function drawScaled(src, maxSide, bg = null) {
+  const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
   const s = Math.min(1, maxSide / Math.max(w, h));
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(w * s));
   c.height = Math.max(1, Math.round(h * s));
   try {
-    ctx2d(c).drawImage(src, 0, 0, c.width, c.height);
+    const ctx = ctx2d(c);
+    if (bg) {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
+    ctx.drawImage(src, 0, 0, c.width, c.height);
   } catch (err) {
     releaseCanvas(c);
     throw err;
@@ -58,8 +66,17 @@ function releaseCanvas(c) {
   c.height = 0;
 }
 
-const toBlob = (canvas, type, q) =>
-  new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), type, q));
+// 用 toDataURL 立即編碼：toBlob 在部分瀏覽器會等到「閒置時」才執行，
+// 載入動畫進行中可能拖到好幾秒
+async function toBlob(canvas, type, q) {
+  const url = canvas.toDataURL(type, q);
+  const comma = url.indexOf(',');
+  if (comma < 0 || !url.startsWith('data:' + type)) throw new Error('encode failed');
+  const bin = atob(url.slice(comma + 1));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
 
 async function makeThumb(canvas) {
   const s = Math.min(1, THUMB_SIDE / Math.max(canvas.width, canvas.height));
@@ -114,6 +131,7 @@ function setView(name) {
   // 離開編輯畫面時釋放大圖記憶體
   if (prev === 'crop' && name !== 'crop') releaseCrop();
   if (prev === 'lineart' && name !== 'lineart') releaseLine();
+  if (prev === 'style' && name !== 'style') releaseStyle();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === name));
   const theme = document.querySelector('meta[name="theme-color"]');
   const dark = $(name).classList.contains('dark');
@@ -234,6 +252,7 @@ function renderGallery() {
     b.appendChild(img);
     if (rec.note?.trim()) b.insertAdjacentHTML('beforeend', '<i class="mk note"></i>');
     if (rec.kind === 'lineart') b.insertAdjacentHTML('beforeend', '<i class="mk line"></i>');
+    else if (rec.style) b.insertAdjacentHTML('beforeend', '<i class="mk style"></i>');
     b.addEventListener('click', () => { state.index = i; go('viewer'); });
     frag.appendChild(b);
   });
@@ -395,7 +414,7 @@ $('tShare').addEventListener('click', async () => {
   const ext = rec.kind === 'lineart' ? 'png' : 'jpg';
   const d = new Date(rec.created);
   const pad = (n) => String(n).padStart(2, '0');
-  const name = `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${rec.kind === 'lineart' ? '-line' : ''}.${ext}`;
+  const name = `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${rec.kind === 'lineart' ? '-line' : rec.style ? '-' + rec.style : ''}.${ext}`;
   const file = new File([rec.image], name, { type: rec.image.type });
   try {
     if (navigator.canShare?.({ files: [file] })) {
@@ -790,6 +809,102 @@ $('lineOk').addEventListener('click', async () => {
   state.index = state.list.findIndex((r) => r.id === created.id);
   busy(false);
   back(); // 返回時 setView 會呼叫 releaseLine()
+  toast();
+});
+
+/* =========================================================
+   風格：素描 / 蠟筆 / 浮雕
+   預覽用 1200px 小圖即時計算；按 ✓ 時才用原尺寸計算並存成新的一張。
+   ========================================================= */
+const styleCanvas = $('styleCanvas');
+const sty = { img: null, src: null, style: 'sketch', raf: 0 };
+const PREVIEW_SIDE = 1200;
+const styleLevel = () => Number($('styleLevel').value) / 100;
+
+$('tStyle').addEventListener('click', async () => {
+  const rec = current();
+  if (!rec) return;
+  busy(true);
+  await nextFrame();
+  try {
+    const img = await loadImage(rec.image);
+    const c = drawScaled(img, PREVIEW_SIDE, '#fff');
+    try {
+      sty.src = ctx2d(c).getImageData(0, 0, c.width, c.height);
+    } finally {
+      releaseCanvas(c);
+    }
+    sty.img = img;
+    styleCanvas.width = sty.src.width;
+    styleCanvas.height = sty.src.height;
+    renderStyle();
+    go('style');
+  } catch (err) {
+    console.error(err);
+    releaseStyle();
+  } finally {
+    busy(false);
+  }
+});
+
+function renderStyle() {
+  if (!sty.src) return;
+  try {
+    ctx2d(styleCanvas).putImageData(applyStyle(sty.src, sty.style, styleLevel()), 0, 0);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function scheduleStyle() {
+  cancelAnimationFrame(sty.raf);
+  sty.raf = requestAnimationFrame(renderStyle);
+}
+
+function releaseStyle() {
+  cancelAnimationFrame(sty.raf);
+  sty.src = null;
+  sty.img = null;
+  releaseCanvas(styleCanvas);
+}
+
+$('styleChips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip || chip.dataset.style === sty.style) return;
+  sty.style = chip.dataset.style;
+  document.querySelectorAll('#styleChips .chip').forEach((c) => c.classList.toggle('on', c === chip));
+  scheduleStyle();
+});
+$('styleLevel').addEventListener('input', scheduleStyle);
+
+$('styleOk').addEventListener('click', async () => {
+  const rec = current();
+  if (!rec || !sty.img) return;
+  busy(true);
+  await nextFrame();
+  let enc;
+  const c = drawScaled(sty.img, MAX_SIDE, '#fff');
+  try {
+    const ctx = ctx2d(c);
+    ctx.putImageData(applyStyle(ctx.getImageData(0, 0, c.width, c.height), sty.style, styleLevel()), 0, 0);
+    enc = await encodeRecord(c, 'photo');
+  } catch (err) {
+    console.error(err);
+    busy(false);
+    return;
+  } finally {
+    releaseCanvas(c);
+  }
+  const now = Date.now();
+  const created = {
+    id: uid(), created: now, updated: now, kind: 'photo', style: sty.style,
+    note: rec.note || '', source: rec.id, ...enc,
+  };
+  await db.put(created);
+  await reload();
+  state.index = state.list.findIndex((r) => r.id === created.id);
+  busy(false);
+  back(); // 返回時 setView 會呼叫 releaseStyle()
   toast();
 });
 

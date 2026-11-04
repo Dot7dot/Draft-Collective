@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="stylesheet" href="style.css?v=1.3">
+  <link rel="stylesheet" href="style.css?v=1.4">
 </head>
 <body>
   <!-- 幾何圖示 -->
@@ -63,6 +63,19 @@
         <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
         <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/>
       </symbol>
+      <symbol id="i-star" viewBox="0 0 24 24">
+        <path d="M12 2l2.89 5h5.77l-2.89 5 2.89 5h-5.77L12 22l-2.89-5H3.34l2.89-5-2.89-5h5.77z" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-sketch" viewBox="0 0 24 24">
+        <path d="M4 20 20 4M4 13l9-9M11 20l9-9M4 7l3-3M17 20l3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-crayon" viewBox="0 0 24 24">
+        <path d="M6.5 17.5 17.5 6.5" stroke="currentColor" stroke-width="6.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-emboss" viewBox="0 0 24 24">
+        <rect x="7.5" y="7.5" width="13" height="13" rx="1.5" fill="currentColor" opacity=".35"/>
+        <rect x="3.5" y="3.5" width="13" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      </symbol>
       <symbol id="i-dark" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="5" fill="currentColor"/>
       </symbol>
@@ -92,7 +105,7 @@
     <footer class="home-notes">
       <p><i>1</i><span>請使用瀏覽器開啟保持穩定性</span></p>
       <p><i>2</i><span>資料穩定性還在設計中，若是有寶貴的線稿建議立即儲存至手機</span></p>
-      <small class="ver">v1.3</small>
+      <small class="ver">v1.4</small>
     </footer>
   </section>
 
@@ -122,6 +135,7 @@
     <nav class="toolbar labeled">
       <button class="icon-btn" id="tCrop"><svg aria-hidden="true"><use href="#i-crop"/></svg><span class="lbl">剪裁</span></button>
       <button class="icon-btn" id="tLine"><svg aria-hidden="true"><use href="#i-line"/></svg><span class="lbl">線稿</span></button>
+      <button class="icon-btn" id="tStyle"><svg aria-hidden="true"><use href="#i-star"/></svg><span class="lbl">風格</span></button>
       <button class="icon-btn" id="tNote"><svg aria-hidden="true"><use href="#i-note"/></svg><span class="lbl">筆記</span><i class="dot" id="noteDot" hidden></i></button>
       <button class="icon-btn" id="tShare"><svg aria-hidden="true"><use href="#i-share"/></svg><span class="lbl">儲存</span></button>
       <button class="icon-btn danger" id="tDelete"><svg aria-hidden="true"><use href="#i-trash"/></svg><span class="lbl">刪除</span></button>
@@ -163,6 +177,27 @@
     </nav>
   </section>
 
+  <!-- 風格 -->
+  <section id="style" class="view dark">
+    <div class="stage" id="styleStage">
+      <canvas id="styleCanvas"></canvas>
+    </div>
+    <div class="chips" id="styleChips">
+      <button class="chip on" data-style="sketch"><svg aria-hidden="true"><use href="#i-sketch"/></svg><span class="lbl">素描</span></button>
+      <button class="chip" data-style="crayon"><svg aria-hidden="true"><use href="#i-crayon"/></svg><span class="lbl">蠟筆</span></button>
+      <button class="chip" data-style="emboss"><svg aria-hidden="true"><use href="#i-emboss"/></svg><span class="lbl">浮雕</span></button>
+    </div>
+    <div class="slider-row">
+      <svg class="mini" aria-hidden="true"><use href="#i-light"/></svg>
+      <input type="range" id="styleLevel" min="0" max="100" value="50" aria-label="強度">
+      <svg class="mini big" aria-hidden="true"><use href="#i-dark"/></svg>
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" data-back aria-label="取消"><svg><use href="#i-x"/></svg></button>
+      <button class="icon-btn ok" id="styleOk" aria-label="儲存風格"><svg><use href="#i-check"/></svg></button>
+    </nav>
+  </section>
+
   <!-- 筆記 -->
   <section id="note" class="view">
     <header class="bar">
@@ -187,6 +222,6 @@
   <div class="toast" id="toast" aria-live="polite"><svg><use href="#i-check"/></svg></div>
   <div class="busy" id="busy" hidden><i></i></div>
 
-  <script type="module" src="app.js?v=1.3"></script>
+  <script type="module" src="app.js?v=1.4"></script>
 </body>
 </html>
