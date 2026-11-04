@@ -249,7 +249,14 @@ svg { display: block; }
 /* ---------- 剪裁 ---------- */
 #cropStage { padding: calc(24px + var(--safe-t)) 24px 16px; }
 .crop-box { position: relative; }
-.crop-box canvas { display: block; }
+#cropImg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+}
 .crop-rect {
   position: absolute;
   border: 2px solid #fff;

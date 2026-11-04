@@ -39,6 +39,13 @@ function drawScaled(src, maxSide, w = src.naturalWidth || src.width, h = src.nat
   return c;
 }
 
+// iOS Safari 的 canvas 記憶體總量有限，用完立刻把尺寸設為 0 才會真正釋放
+function releaseCanvas(c) {
+  if (!c) return;
+  c.width = 0;
+  c.height = 0;
+}
+
 const toBlob = (canvas, type, q) =>
   new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), type, q));
 
@@ -51,7 +58,11 @@ async function makeThumb(canvas) {
   ctx.fillStyle = '#fff'; // 線稿透明處以白底顯示
   ctx.fillRect(0, 0, t.width, t.height);
   ctx.drawImage(canvas, 0, 0, t.width, t.height);
-  return toBlob(t, 'image/jpeg', 0.8);
+  try {
+    return await toBlob(t, 'image/jpeg', 0.8);
+  } finally {
+    releaseCanvas(t);
+  }
 }
 
 async function encodeRecord(canvas, kind) {
@@ -80,7 +91,11 @@ let currentView = 'home';
 
 function setView(name) {
   if (name === 'viewer' && !current()) name = state.list.length ? 'gallery' : 'home';
+  const prev = currentView;
   currentView = name;
+  // 離開編輯畫面時釋放大圖記憶體
+  if (prev === 'crop' && name !== 'crop') releaseCrop();
+  if (prev === 'lineart' && name !== 'lineart') releaseLine();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === name));
   const theme = document.querySelector('meta[name="theme-color"]');
   const dark = $(name).classList.contains('dark');
@@ -136,7 +151,12 @@ async function ingest(files, fromCamera) {
     for (const file of files) {
       const img = await loadImage(file);
       const canvas = drawScaled(img, MAX_SIDE);
-      const enc = await encodeRecord(canvas, 'photo');
+      let enc;
+      try {
+        enc = await encodeRecord(canvas, 'photo');
+      } finally {
+        releaseCanvas(canvas);
+      }
       const now = Date.now();
       last = { id: uid(), created: now, updated: now, kind: 'photo', note: '', ...enc };
       await db.put(last);
@@ -441,46 +461,67 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveN
 
 /* =========================================================
    剪裁
+   顯示用 <img> + CSS 旋轉，不建立全尺寸 canvas；
+   只有按下完成時才建立一張輸出 canvas，用完立刻釋放。
+   （iOS Safari 的 canvas 記憶體有上限，用滿後新的 canvas 會變成黑畫面）
    ========================================================= */
-const cropCanvas = $('cropCanvas');
+const cropImgEl = $('cropImg');
 const cropRect = $('cropRect');
 const cropBox = $('cropBox');
-const crop = { scale: 1, dw: 0, dh: 0, x: 0, y: 0, w: 0, h: 0, rotated: false };
-let cropSource = null; // 工作中的全尺寸 canvas
+const crop = { scale: 1, dw: 0, dh: 0, x: 0, y: 0, w: 0, h: 0, rot: 0, iw: 0, ih: 0 };
+let cropURL = null;
+
+// 旋轉後的原圖尺寸
+const cropSize = () => (crop.rot % 2 ? { w: crop.ih, h: crop.iw } : { w: crop.iw, h: crop.ih });
 
 $('tCrop').addEventListener('click', async () => {
   const rec = current();
   if (!rec) return;
   busy(true);
-  const img = await loadImage(rec.image);
-  cropSource = drawScaled(img, Infinity);
-  crop.rotated = false;
+  try {
+    if (cropURL) URL.revokeObjectURL(cropURL);
+    cropURL = URL.createObjectURL(rec.image);
+    cropImgEl.src = cropURL;
+    await cropImgEl.decode();
+    crop.iw = cropImgEl.naturalWidth;
+    crop.ih = cropImgEl.naturalHeight;
+    crop.rot = 0;
+  } catch (err) {
+    console.error(err);
+    busy(false);
+    return;
+  }
   busy(false);
   go('crop');
   layoutCrop(false);
 });
 
+function releaseCrop() {
+  crop.iw = crop.ih = 0;
+  cropImgEl.removeAttribute('src');
+  if (cropURL) URL.revokeObjectURL(cropURL);
+  cropURL = null;
+}
+
 function layoutCrop(keepRect) {
-  if (!cropSource) return;
+  if (!crop.iw) return;
   const stage = $('cropStage');
   const cs = getComputedStyle(stage);
   const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
   const old = { ...crop };
-  const scale = Math.min(aw / cropSource.width, ah / cropSource.height);
+  const { w, h } = cropSize();
+  const scale = Math.min(aw / w, ah / h);
   crop.scale = scale;
-  crop.dw = Math.round(cropSource.width * scale);
-  crop.dh = Math.round(cropSource.height * scale);
+  crop.dw = Math.round(w * scale);
+  crop.dh = Math.round(h * scale);
 
-  // 顯示用的 canvas 使用較低解析度即可
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  cropCanvas.width = Math.round(crop.dw * dpr);
-  cropCanvas.height = Math.round(crop.dh * dpr);
-  cropCanvas.style.width = crop.dw + 'px';
-  cropCanvas.style.height = crop.dh + 'px';
-  cropCanvas.getContext('2d').drawImage(cropSource, 0, 0, cropCanvas.width, cropCanvas.height);
   cropBox.style.width = crop.dw + 'px';
   cropBox.style.height = crop.dh + 'px';
+  // 圖片本身以未旋轉的尺寸擺在中央，再用 CSS 旋轉
+  cropImgEl.style.width = Math.round(crop.iw * scale) + 'px';
+  cropImgEl.style.height = Math.round(crop.ih * scale) + 'px';
+  cropImgEl.style.transform = `translate(-50%, -50%) rotate(${crop.rot * 90}deg)`;
 
   if (keepRect && old.dw) {
     const k = crop.dw / old.dw;
@@ -550,38 +591,44 @@ function drawCropRect() {
 })();
 
 $('cropRotate').addEventListener('click', () => {
-  if (!cropSource) return;
-  const c = document.createElement('canvas');
-  c.width = cropSource.height;
-  c.height = cropSource.width;
-  const ctx = c.getContext('2d');
-  ctx.translate(c.width, 0);
-  ctx.rotate(Math.PI / 2);
-  ctx.drawImage(cropSource, 0, 0);
-  cropSource = c;
-  crop.rotated = true;
+  if (!crop.iw) return;
+  crop.rot = (crop.rot + 1) % 4;
   layoutCrop(false);
 });
 
 $('cropOk').addEventListener('click', async () => {
   const rec = current();
-  if (!rec || !cropSource) return;
+  if (!rec || !crop.iw) return;
   const s = crop.scale;
-  const sx = Math.round(crop.x / s), sy = Math.round(crop.y / s);
-  const sw = Math.min(cropSource.width - sx, Math.round(crop.w / s));
-  const sh = Math.min(cropSource.height - sy, Math.round(crop.h / s));
-  const untouched = !crop.rotated && sx === 0 && sy === 0 && sw === cropSource.width && sh === cropSource.height;
+  const full = cropSize();
+  const sx = Math.max(0, Math.round(crop.x / s));
+  const sy = Math.max(0, Math.round(crop.y / s));
+  const sw = Math.max(1, Math.min(full.w - sx, Math.round(crop.w / s)));
+  const sh = Math.max(1, Math.min(full.h - sy, Math.round(crop.h / s)));
+  const untouched = crop.rot === 0 && sx === 0 && sy === 0 && sw === full.w && sh === full.h;
   if (untouched) { back(); return; }
 
   busy(true);
   await nextFrame();
   const out = document.createElement('canvas');
-  out.width = sw;
-  out.height = sh;
-  out.getContext('2d').drawImage(cropSource, sx, sy, sw, sh, 0, 0, sw, sh);
-  Object.assign(rec, await encodeRecord(out, rec.kind), { updated: Date.now() });
-  await db.put(rec);
-  cropSource = null;
+  try {
+    out.width = sw;
+    out.height = sh;
+    const ctx = out.getContext('2d');
+    // 把旋轉後的整張圖往左上平移，canvas 自然只留下剪裁範圍
+    ctx.translate(-sx, -sy);
+    ctx.translate(full.w / 2, full.h / 2);
+    ctx.rotate((crop.rot * Math.PI) / 2);
+    ctx.drawImage(cropImgEl, -crop.iw / 2, -crop.ih / 2, crop.iw, crop.ih);
+    Object.assign(rec, await encodeRecord(out, rec.kind), { updated: Date.now() });
+    await db.put(rec);
+  } catch (err) {
+    console.error(err);
+    busy(false);
+    return;
+  } finally {
+    releaseCanvas(out);
+  }
   busy(false);
   back();
   toast();
@@ -604,16 +651,30 @@ $('tLine').addEventListener('click', async () => {
   try {
     const img = await loadImage(rec.image);
     const src = drawScaled(img, MAX_SIDE);
-    prepareLineart(src);
+    try {
+      prepareLineart(src);
+    } finally {
+      releaseCanvas(src);
+    }
     lineCanvas.width = line.w;
     lineCanvas.height = line.h;
     line.out = lineCanvas.getContext('2d').createImageData(line.w, line.h);
     renderLineart();
     go('lineart');
+  } catch (err) {
+    console.error(err);
+    releaseLine();
   } finally {
     busy(false);
   }
 });
+
+function releaseLine() {
+  cancelAnimationFrame(lineRAF);
+  line.diff = null;
+  line.out = null;
+  releaseCanvas(lineCanvas);
+}
 
 function prepareLineart(src) {
   const w = src.width, h = src.height, n = w * h;
@@ -669,6 +730,7 @@ function prepareLineart(src) {
 }
 
 function renderLineart() {
+  if (!line.diff || !line.out) return;
   const level = Number($('lineLevel').value) / 100; // 0=淡 1=濃
   const t = 0.30 - level * 0.27;  // 閾值
   const ramp = 0.10 + level * 0.06;
@@ -697,7 +759,7 @@ $('lineBg').addEventListener('click', () => {
 
 $('lineOk').addEventListener('click', async () => {
   const rec = current();
-  if (!rec) return;
+  if (!rec || !line.diff) return;
   busy(true);
   await nextFrame();
   const enc = await encodeRecord(lineCanvas, 'lineart');
@@ -706,9 +768,8 @@ $('lineOk').addEventListener('click', async () => {
   await db.put(created);
   await reload();
   state.index = state.list.findIndex((r) => r.id === created.id);
-  line.diff = null;
   busy(false);
-  back();
+  back(); // 返回時 setView 會呼叫 releaseLine()
   toast();
 });
 
