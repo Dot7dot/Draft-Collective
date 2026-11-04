@@ -1,5 +1,5 @@
 // 離線快取：App 外殼檔案
-const CACHE = 'draft-collective-v1';
+const CACHE = 'draft-collective-v2';
 const SHELL = [
   './',
   './index.html',
