@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#f3efe6">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Draft">
+  <title>Draft Collective</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 幾何圖示 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-shutter" viewBox="0 0 48 48">
+        <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="3"/>
+        <circle cx="24" cy="24" r="14" fill="var(--accent)"/>
+      </symbol>
+      <symbol id="i-grid" viewBox="0 0 48 48">
+        <rect x="5" y="5" width="16" height="16" rx="2" fill="currentColor"/>
+        <rect x="27" y="5" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="3"/>
+        <rect x="5" y="27" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="3"/>
+        <rect x="27" y="27" width="16" height="16" rx="2" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-back" viewBox="0 0 24 24">
+        <path d="M15 5 7 12l8 7z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24">
+        <path d="M7 2v15h15M2 7h15v15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-line" viewBox="0 0 24 24">
+        <path d="M12 3.5 21 19.5H3z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-note" viewBox="0 0 24 24">
+        <path d="M4 6h16M4 12h16M4 18h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-share" viewBox="0 0 24 24">
+        <path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24">
+        <path d="M3.5 6.5h17M9 6.5V3.5h6v3M5.5 6.5l1.2 14h10.6l1.2-14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-x" viewBox="0 0 24 24">
+        <path d="M5 5l14 14M19 5 5 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-rotate" viewBox="0 0 24 24">
+        <path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M20 3v6h-6z" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-bg" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+        <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-dark" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="5" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-light" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="currentColor"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
+  <input type="file" id="pickInput" accept="image/*" multiple hidden>
+
+  <!-- 首頁：只有兩個按鈕 -->
+  <section id="home" class="view active">
+    <div class="home-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="home-actions">
+      <button class="big-btn" id="homeShoot" aria-label="拍照記錄">
+        <svg><use href="#i-shutter"/></svg>
+      </button>
+      <button class="big-btn" id="homeGallery" aria-label="觀看畫作">
+        <svg><use href="#i-grid"/></svg>
+        <span class="badge" id="homeCount" hidden></span>
+      </button>
+    </div>
+  </section>
+
+  <!-- 畫冊 -->
+  <section id="gallery" class="view">
+    <header class="bar">
+      <button class="icon-btn" data-back aria-label="返回"><svg><use href="#i-back"/></svg></button>
+      <button class="icon-btn" id="importBtn" aria-label="從相簿匯入"><svg><use href="#i-plus"/></svg></button>
+    </header>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>
+      <div class="empty-frame"></div>
+    </div>
+    <button class="fab" id="galleryShoot" aria-label="拍照記錄"><svg><use href="#i-shutter"/></svg></button>
+  </section>
+
+  <!-- 檢視 -->
+  <section id="viewer" class="view dark">
+    <header class="bar">
+      <button class="icon-btn" data-back aria-label="返回"><svg><use href="#i-back"/></svg></button>
+      <div class="pager" id="pager" aria-hidden="true"></div>
+      <span class="icon-btn ghost" aria-hidden="true"></span>
+    </header>
+    <div class="stage" id="viewStage">
+      <img id="viewImg" alt="" draggable="false">
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" id="tCrop" aria-label="剪裁"><svg><use href="#i-crop"/></svg></button>
+      <button class="icon-btn" id="tLine" aria-label="提取線稿"><svg><use href="#i-line"/></svg></button>
+      <button class="icon-btn" id="tNote" aria-label="靈感筆記"><svg><use href="#i-note"/></svg><i class="dot" id="noteDot" hidden></i></button>
+      <button class="icon-btn" id="tShare" aria-label="分享／儲存"><svg><use href="#i-share"/></svg></button>
+      <button class="icon-btn danger" id="tDelete" aria-label="刪除"><svg><use href="#i-trash"/></svg></button>
+    </nav>
+  </section>
+
+  <!-- 剪裁 -->
+  <section id="crop" class="view dark">
+    <div class="stage" id="cropStage">
+      <div class="crop-box" id="cropBox">
+        <canvas id="cropCanvas"></canvas>
+        <div class="crop-rect" id="cropRect">
+          <i class="h" data-h="nw"></i><i class="h" data-h="ne"></i>
+          <i class="h" data-h="sw"></i><i class="h" data-h="se"></i>
+        </div>
+      </div>
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" data-back aria-label="取消"><svg><use href="#i-x"/></svg></button>
+      <button class="icon-btn" id="cropRotate" aria-label="旋轉"><svg><use href="#i-rotate"/></svg></button>
+      <button class="icon-btn ok" id="cropOk" aria-label="完成"><svg><use href="#i-check"/></svg></button>
+    </nav>
+  </section>
+
+  <!-- 線稿 -->
+  <section id="lineart" class="view dark">
+    <div class="stage checker" id="lineStage">
+      <canvas id="lineCanvas"></canvas>
+    </div>
+    <div class="slider-row">
+      <svg class="mini" aria-hidden="true"><use href="#i-light"/></svg>
+      <input type="range" id="lineLevel" min="0" max="100" value="65" aria-label="線條濃度">
+      <svg class="mini big" aria-hidden="true"><use href="#i-dark"/></svg>
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" data-back aria-label="取消"><svg><use href="#i-x"/></svg></button>
+      <button class="icon-btn" id="lineBg" aria-label="切換背景"><svg><use href="#i-bg"/></svg></button>
+      <button class="icon-btn ok" id="lineOk" aria-label="儲存線稿"><svg><use href="#i-check"/></svg></button>
+    </nav>
+  </section>
+
+  <!-- 筆記 -->
+  <section id="note" class="view">
+    <header class="bar">
+      <span class="icon-btn ghost" aria-hidden="true"></span>
+      <img id="noteThumb" class="note-thumb" alt="">
+      <button class="icon-btn ok" data-back aria-label="完成"><svg><use href="#i-check"/></svg></button>
+    </header>
+    <textarea id="noteText" aria-label="靈感筆記" spellcheck="false"></textarea>
+  </section>
+
+  <!-- 確認刪除 -->
+  <div class="modal" id="confirm" hidden>
+    <div class="modal-card">
+      <img id="confirmThumb" alt="">
+      <div class="modal-actions">
+        <button class="icon-btn" id="confirmNo" aria-label="取消"><svg><use href="#i-x"/></svg></button>
+        <button class="icon-btn danger solid" id="confirmYes" aria-label="確認刪除"><svg><use href="#i-trash"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" aria-live="polite"><svg><use href="#i-check"/></svg></div>
+  <div class="busy" id="busy" hidden><i></i></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
