@@ -1,5 +1,5 @@
 // 離線快取：App 外殼檔案
-const CACHE = 'draft-collective-v2';
+const CACHE = 'draft-collective-v3';
 const SHELL = [
   './',
   './index.html',
@@ -29,7 +29,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // no-cache：每次都向伺服器確認是否有新版，避免手機停在舊版
+    fetch(e.request.url, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
