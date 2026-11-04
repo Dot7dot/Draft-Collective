@@ -1,11 +1,12 @@
 // 離線快取：App 外殼檔案
-const CACHE = 'draft-collective-v3';
+const CACHE = 'draft-collective-v4';
 const SHELL = [
   './',
   './index.html',
   './style.css',
   './app.js',
   './db.js',
+  './filters.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-180.png',
