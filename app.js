@@ -30,12 +30,24 @@ function loadImage(blob) {
   });
 }
 
+// iOS 記憶體不足時 getContext 會回傳 null，這時要中止而不是存成空白圖
+function ctx2d(c) {
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('canvas unavailable');
+  return ctx;
+}
+
 function drawScaled(src, maxSide, w = src.naturalWidth || src.width, h = src.naturalHeight || src.height) {
   const s = Math.min(1, maxSide / Math.max(w, h));
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(w * s));
   c.height = Math.max(1, Math.round(h * s));
-  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  try {
+    ctx2d(c).drawImage(src, 0, 0, c.width, c.height);
+  } catch (err) {
+    releaseCanvas(c);
+    throw err;
+  }
   return c;
 }
 
@@ -54,7 +66,13 @@ async function makeThumb(canvas) {
   const t = document.createElement('canvas');
   t.width = Math.max(1, Math.round(canvas.width * s));
   t.height = Math.max(1, Math.round(canvas.height * s));
-  const ctx = t.getContext('2d');
+  let ctx;
+  try {
+    ctx = ctx2d(t);
+  } catch (err) {
+    releaseCanvas(t);
+    throw err;
+  }
   ctx.fillStyle = '#fff'; // 線稿透明處以白底顯示
   ctx.fillRect(0, 0, t.width, t.height);
   ctx.drawImage(canvas, 0, 0, t.width, t.height);
@@ -469,38 +487,40 @@ const cropImgEl = $('cropImg');
 const cropRect = $('cropRect');
 const cropBox = $('cropBox');
 const crop = { scale: 1, dw: 0, dh: 0, x: 0, y: 0, w: 0, h: 0, rot: 0, iw: 0, ih: 0 };
-let cropURL = null;
 
 // 旋轉後的原圖尺寸
 const cropSize = () => (crop.rot % 2 ? { w: crop.ih, h: crop.iw } : { w: crop.iw, h: crop.ih });
 
 $('tCrop').addEventListener('click', async () => {
   const rec = current();
-  if (!rec) return;
-  busy(true);
+  if (!rec || !state.viewURL) return;
+  crop.iw = crop.ih = crop.rot = 0;
+  cropRect.hidden = true;
+  go('crop');
+  // 使用檢視畫面已經顯示的同一張圖（已解碼，不另外佔記憶體）
   try {
-    if (cropURL) URL.revokeObjectURL(cropURL);
-    cropURL = URL.createObjectURL(rec.image);
-    cropImgEl.src = cropURL;
-    await cropImgEl.decode();
-    crop.iw = cropImgEl.naturalWidth;
-    crop.ih = cropImgEl.naturalHeight;
-    crop.rot = 0;
+    await new Promise((resolve, reject) => {
+      cropImgEl.onload = resolve;
+      cropImgEl.onerror = reject;
+      cropImgEl.src = state.viewURL;
+      if (cropImgEl.complete && cropImgEl.naturalWidth) resolve();
+    });
   } catch (err) {
     console.error(err);
-    busy(false);
+    if (currentView === 'crop') back();
     return;
   }
-  busy(false);
-  go('crop');
+  if (currentView !== 'crop') return;
+  crop.iw = cropImgEl.naturalWidth;
+  crop.ih = cropImgEl.naturalHeight;
+  cropRect.hidden = false;
   layoutCrop(false);
 });
 
 function releaseCrop() {
   crop.iw = crop.ih = 0;
-  cropImgEl.removeAttribute('src');
-  if (cropURL) URL.revokeObjectURL(cropURL);
-  cropURL = null;
+  cropImgEl.onload = cropImgEl.onerror = null;
+  cropImgEl.removeAttribute('src'); // 圖片網址屬於檢視畫面，不在這裡回收
 }
 
 function layoutCrop(keepRect) {
@@ -614,7 +634,7 @@ $('cropOk').addEventListener('click', async () => {
   try {
     out.width = sw;
     out.height = sh;
-    const ctx = out.getContext('2d');
+    const ctx = ctx2d(out);
     // 把旋轉後的整張圖往左上平移，canvas 自然只留下剪裁範圍
     ctx.translate(-sx, -sy);
     ctx.translate(full.w / 2, full.h / 2);
@@ -658,7 +678,7 @@ $('tLine').addEventListener('click', async () => {
     }
     lineCanvas.width = line.w;
     lineCanvas.height = line.h;
-    line.out = lineCanvas.getContext('2d').createImageData(line.w, line.h);
+    line.out = ctx2d(lineCanvas).createImageData(line.w, line.h);
     renderLineart();
     go('lineart');
   } catch (err) {
@@ -678,7 +698,7 @@ function releaseLine() {
 
 function prepareLineart(src) {
   const w = src.width, h = src.height, n = w * h;
-  const data = src.getContext('2d').getImageData(0, 0, w, h).data;
+  const data = ctx2d(src).getImageData(0, 0, w, h).data;
 
   // 灰階（若有透明則視為白紙）
   const gray = new Float32Array(n);
@@ -781,6 +801,16 @@ $('lineOk').addEventListener('click', async () => {
   await reload();
   setView('home');
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // 有新版本接手時自動重新整理，避免手機一直停在舊版
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      if (currentView === 'home' || currentView === 'gallery') location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((reg) => reg.update())
+      .catch(() => {});
   }
 })();

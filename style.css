@@ -82,6 +82,24 @@ svg { display: block; }
 .icon-btn.ok { color: var(--accent); }
 .icon-btn.danger { color: var(--accent); }
 .icon-btn.solid { background: var(--accent); color: #fff; }
+.toolbar.labeled .icon-btn {
+  width: 60px;
+  height: 58px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.toolbar.labeled .icon-btn svg { width: 24px; height: 24px; }
+.toolbar.labeled .icon-btn .dot { top: 5px; right: 13px; }
+.lbl {
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: .12em;
+  opacity: .72;
+}
 .icon-btn .dot {
   position: absolute;
   top: 9px; right: 9px;
@@ -93,9 +111,59 @@ svg { display: block; }
 /* ---------- 首頁 ---------- */
 #home {
   align-items: center;
+  padding: var(--safe-t) 24px calc(18px + var(--safe-b));
+}
+.home-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: 9vh;
-  padding: var(--safe-t) 24px var(--safe-b);
+  gap: 7vh;
+}
+.home-notes {
+  flex: none;
+  width: 100%;
+  max-width: 320px;
+  padding-top: 16px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+  letter-spacing: .04em;
+  position: relative;
+}
+.home-notes::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 50%;
+  width: 24px; height: 2px;
+  margin-left: -12px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.home-notes p {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+.home-notes p i {
+  flex: none;
+  width: 16px; height: 16px;
+  margin-top: 1px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font: 600 9.5px/14px ui-monospace, Menlo, monospace;
+  font-style: normal;
+  text-align: center;
+}
+.home-notes .ver {
+  display: block;
+  margin-top: 10px;
+  text-align: center;
+  font: 9.5px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: .15em;
+  opacity: .55;
 }
 .home-mark { display: flex; gap: 10px; align-items: flex-end; }
 .home-mark span { display: block; background: var(--ink); }
@@ -257,6 +325,7 @@ svg { display: block; }
   pointer-events: none;
   transform-origin: 50% 50%;
 }
+.crop-rect[hidden] { display: none; }
 .crop-rect {
   position: absolute;
   border: 2px solid #fff;
