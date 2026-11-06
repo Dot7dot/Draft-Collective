@@ -1,5 +1,5 @@
 import * as db from './db.js';
-import { applyStyle } from './filters.js';
+import { applyStyle, lineMask, lineDiff, lineAlpha } from './filters.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -252,8 +252,8 @@ function renderGallery() {
     img.loading = 'lazy';
     b.appendChild(img);
     if (rec.note?.trim()) b.insertAdjacentHTML('beforeend', '<i class="mk note"></i>');
-    if (rec.kind === 'lineart') b.insertAdjacentHTML('beforeend', '<i class="mk line"></i>');
-    else if (rec.style) b.insertAdjacentHTML('beforeend', '<i class="mk style"></i>');
+    if (rec.style) b.insertAdjacentHTML('beforeend', '<i class="mk style"></i>');
+    else if (rec.kind === 'lineart') b.insertAdjacentHTML('beforeend', '<i class="mk line"></i>');
     b.addEventListener('click', () => { state.index = i; go('viewer'); });
     frag.appendChild(b);
   });
@@ -416,7 +416,7 @@ $('tShare').addEventListener('click', async () => {
   const ext = rec.kind === 'lineart' ? 'png' : 'jpg';
   const d = new Date(rec.created);
   const pad = (n) => String(n).padStart(2, '0');
-  const name = `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${rec.kind === 'lineart' ? '-line' : rec.style ? '-' + rec.style : ''}.${ext}`;
+  const name = `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${rec.style ? '-' + rec.style : rec.kind === 'lineart' ? '-line' : ''}.${ext}`;
   const file = new File([rec.image], name, { type: rec.image.type });
   try {
     if (navigator.canShare?.({ files: [file] })) {
@@ -718,69 +718,18 @@ function releaseLine() {
 }
 
 function prepareLineart(src) {
-  const w = src.width, h = src.height, n = w * h;
+  const w = src.width, h = src.height;
   const data = ctx2d(src).getImageData(0, 0, w, h).data;
-
-  // 灰階（若有透明則視為白紙）
-  const gray = new Float32Array(n);
-  for (let i = 0, j = 0; i < n; i++, j += 4) {
-    const a = data[j + 3] / 255;
-    const g = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
-    gray[i] = g * a + 255 * (1 - a);
-  }
-
-  // 輕微模糊去除雜訊（3x3）
-  const soft = new Float32Array(n);
-  for (let y = 0; y < h; y++) {
-    const y0 = Math.max(0, y - 1) * w, y1 = y * w, y2 = Math.min(h - 1, y + 1) * w;
-    for (let x = 0; x < w; x++) {
-      const x0 = Math.max(0, x - 1), x2 = Math.min(w - 1, x + 1);
-      soft[y1 + x] = (
-        gray[y0 + x0] + gray[y0 + x] + gray[y0 + x2] +
-        gray[y1 + x0] + gray[y1 + x] * 2 + gray[y1 + x2] +
-        gray[y2 + x0] + gray[y2 + x] + gray[y2 + x2]
-      ) / 10;
-    }
-  }
-
-  // 積分圖求區域平均
-  const W = w + 1;
-  const integral = new Float64Array(W * (h + 1));
-  for (let y = 0; y < h; y++) {
-    let row = 0;
-    for (let x = 0; x < w; x++) {
-      row += gray[y * w + x];
-      integral[(y + 1) * W + x + 1] = integral[y * W + x + 1] + row;
-    }
-  }
-
-  const r = Math.max(8, Math.round(Math.min(w, h) / 30));
-  const diff = new Float32Array(n);
-  for (let y = 0; y < h; y++) {
-    const ya = Math.max(0, y - r), yb = Math.min(h - 1, y + r) + 1;
-    for (let x = 0; x < w; x++) {
-      const xa = Math.max(0, x - r), xb = Math.min(w - 1, x + r) + 1;
-      const sum = integral[yb * W + xb] - integral[ya * W + xb] - integral[yb * W + xa] + integral[ya * W + xa];
-      const mean = sum / ((xb - xa) * (yb - ya));
-      // 相對於周圍亮度的暗度（0~1），在亮紙上更敏感
-      diff[y * w + x] = (mean - soft[y * w + x]) / Math.max(40, mean);
-    }
-  }
-
-  Object.assign(line, { w, h, diff });
+  Object.assign(line, { w, h, diff: lineDiff(data, w, h) });
 }
 
 function renderLineart() {
   if (!line.diff || !line.out) return;
   const level = Number($('lineLevel').value) / 100; // 0=淡 1=濃
-  const t = 0.30 - level * 0.27;  // 閾值
-  const ramp = 0.10 + level * 0.06;
   const { diff } = line;
   const out = line.out.data;
   for (let i = 0, j = 0; i < diff.length; i++, j += 4) {
-    let a = (diff[i] - t) / ramp;
-    a = a <= 0 ? 0 : a >= 1 ? 255 : Math.round(Math.sqrt(a) * 255);
-    out[j] = 18; out[j + 1] = 18; out[j + 2] = 18; out[j + 3] = a;
+    out[j] = 18; out[j + 1] = 18; out[j + 2] = 18; out[j + 3] = lineAlpha(diff[i], level);
   }
   lineCanvas.getContext('2d').putImageData(line.out, 0, 0);
 }
@@ -1099,11 +1048,24 @@ function releaseEraser() {
 }
 
 /* =========================================================
-   風格：素描 / 蠟筆 / 浮雕
-   預覽用 1200px 小圖即時計算；按 ✓ 時才用原尺寸計算並存成新的一張。
+   風格：素描 / 蠟筆 / 麥克筆 / 浮雕
+   以線條為對象：線稿檔直接用它的線；照片先自動提取線條。
+   預覽用 1200px 小圖即時計算；按 ✓ 時才用原尺寸計算，
+   存成新的一張透明背景線稿（原圖保留）。
    ========================================================= */
 const styleCanvas = $('styleCanvas');
-const sty = { img: null, src: null, style: 'sketch', raf: 0 };
+const sty = { img: null, mask: null, w: 0, h: 0, isLine: false, style: 'sketch', raf: 0 };
+
+// 讀出線條遮罩：線稿保留透明度，照片鋪白底後提取線條
+function maskOf(img, maxSide, isLine) {
+  const c = drawScaled(img, maxSide, isLine ? null : '#fff');
+  try {
+    const id = ctx2d(c).getImageData(0, 0, c.width, c.height);
+    return { mask: lineMask(id, isLine), w: c.width, h: c.height };
+  } finally {
+    releaseCanvas(c);
+  }
+}
 const PREVIEW_SIDE = 1200;
 const styleLevel = () => Number($('styleLevel').value) / 100;
 
@@ -1114,15 +1076,11 @@ $('tStyle').addEventListener('click', async () => {
   await nextFrame();
   try {
     const img = await loadImage(rec.image);
-    const c = drawScaled(img, PREVIEW_SIDE, '#fff');
-    try {
-      sty.src = ctx2d(c).getImageData(0, 0, c.width, c.height);
-    } finally {
-      releaseCanvas(c);
-    }
+    sty.isLine = rec.kind === 'lineart';
+    Object.assign(sty, maskOf(img, PREVIEW_SIDE, sty.isLine));
     sty.img = img;
-    styleCanvas.width = sty.src.width;
-    styleCanvas.height = sty.src.height;
+    styleCanvas.width = sty.w;
+    styleCanvas.height = sty.h;
     renderStyle();
     go('style');
   } catch (err) {
@@ -1134,9 +1092,9 @@ $('tStyle').addEventListener('click', async () => {
 });
 
 function renderStyle() {
-  if (!sty.src) return;
+  if (!sty.mask) return;
   try {
-    ctx2d(styleCanvas).putImageData(applyStyle(sty.src, sty.style, styleLevel()), 0, 0);
+    ctx2d(styleCanvas).putImageData(applyStyle(sty.mask, sty.w, sty.h, sty.style, styleLevel()), 0, 0);
   } catch (err) {
     console.error(err);
   }
@@ -1149,7 +1107,7 @@ function scheduleStyle() {
 
 function releaseStyle() {
   cancelAnimationFrame(sty.raf);
-  sty.src = null;
+  sty.mask = null;
   sty.img = null;
   releaseCanvas(styleCanvas);
 }
@@ -1169,11 +1127,14 @@ $('styleOk').addEventListener('click', async () => {
   busy(true);
   await nextFrame();
   let enc;
-  const c = drawScaled(sty.img, MAX_SIDE, '#fff');
+  let c = null;
   try {
-    const ctx = ctx2d(c);
-    ctx.putImageData(applyStyle(ctx.getImageData(0, 0, c.width, c.height), sty.style, styleLevel()), 0, 0);
-    enc = await encodeRecord(c, 'photo');
+    const full = maskOf(sty.img, MAX_SIDE, sty.isLine);
+    c = document.createElement('canvas');
+    c.width = full.w;
+    c.height = full.h;
+    ctx2d(c).putImageData(applyStyle(full.mask, full.w, full.h, sty.style, styleLevel()), 0, 0);
+    enc = await encodeRecord(c, 'lineart');
   } catch (err) {
     console.error(err);
     busy(false);
@@ -1183,7 +1144,7 @@ $('styleOk').addEventListener('click', async () => {
   }
   const now = Date.now();
   const created = {
-    id: uid(), created: now, updated: now, kind: 'photo', style: sty.style,
+    id: uid(), created: now, updated: now, kind: 'lineart', style: sty.style,
     note: rec.note || '', source: rec.id, ...enc,
   };
   await db.put(created);

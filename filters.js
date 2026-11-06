@@ -1,8 +1,9 @@
-// 風格濾鏡：素描 / 蠟筆 / 浮雕
-// 輸入輸出都是 ImageData（RGBA），level 0~1 為強度。
-// 所有半徑都依圖片大小縮放，所以預覽（小圖）和存檔（大圖）效果一致。
+// 線稿與風格濾鏡
+// 風格都以「線條」為對象：線稿檔直接用它的線，照片先自動提取線條。
+// 輸出為透明背景的 ImageData。level 0~1 為強度；
+// 所有尺寸都依圖片大小縮放，所以預覽（小圖）和存檔（大圖）效果一致。
 
-const PAPER = [246, 242, 233];
+/* ---------------- 基本工具 ---------------- */
 
 // 依座標產生 0~1 的固定亂數（同一位置永遠同一值）
 function hash(x, y) {
@@ -21,13 +22,7 @@ function valueNoise(x, y) {
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 
-function toGray(data, n) {
-  const g = new Float32Array(n);
-  for (let i = 0, j = 0; i < n; i++, j += 4) {
-    g[i] = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
-  }
-  return g;
-}
+const smooth = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // 可分離的方框模糊（前綴和），三次近似高斯
 function boxBlur(src, w, h, r) {
@@ -54,211 +49,247 @@ function boxBlur(src, w, h, r) {
 }
 const gaussian = (src, w, h, r) => boxBlur(boxBlur(boxBlur(src, w, h, r), w, h, r), w, h, r);
 
-// 自動對比：把 1%~99% 的亮度拉到 0~255
-function levels(gray, n) {
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < n; i++) hist[gray[i] | 0]++;
-  let lo = 0, hi = 255, acc = 0;
-  for (; lo < 255; lo++) { acc += hist[lo]; if (acc > n * 0.01) break; }
-  acc = 0;
-  for (; hi > 0; hi--) { acc += hist[hi]; if (acc > n * 0.01) break; }
-  if (hi - lo < 16) return { lo: 0, k: 1 };
-  return { lo, k: 255 / (hi - lo) };
+// 1D 滑動最大值（單調佇列，O(n)）
+function slideMax(src, out, start, stride, len, r, q) {
+  let head = 0, tail = 0;
+  for (let i = 0, add = 0; i < len; i++) {
+    // 把視窗右端 i + r 加進佇列
+    for (; add <= Math.min(len - 1, i + r); add++) {
+      const v = src[start + add * stride];
+      while (tail > head && src[start + q[tail - 1] * stride] <= v) tail--;
+      q[tail++] = add;
+    }
+    while (q[head] < i - r) head++;
+    out[start + i * stride] = src[start + q[head] * stride];
+  }
 }
 
-const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
-const smooth = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
-
-// 紙張光線：把圖切成粗格子，取每格最亮的部分（通常是紙）當作當地光線，
-// 再向鄰格擴張、平滑、內插回全圖。大面積塗色不會被誤當成紙。
-function paperLight(gray, w, h) {
-  const cell = Math.max(8, Math.ceil(Math.max(w, h) / 14));
-  const gw = Math.ceil(w / cell), gh = Math.ceil(h / cell);
-  const grid = new Float32Array(gw * gh);
-  const hist = new Uint32Array(256);
-  for (let cy = 0; cy < gh; cy++) {
-    for (let cx = 0; cx < gw; cx++) {
-      hist.fill(0);
-      const x0 = cx * cell, y0 = cy * cell;
-      const x1 = Math.min(w, x0 + cell), y1 = Math.min(h, y0 + cell);
-      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) hist[gray[y * w + x] | 0]++;
-      const target = (x1 - x0) * (y1 - y0) * 0.05; // 第 95 百分位
-      let v = 255, acc = 0;
-      for (; v > 0; v--) { acc += hist[v]; if (acc >= target) break; }
-      grid[cy * gw + cx] = v;
-    }
-  }
-  // 向鄰格取最大值（塗滿顏色的格子借用旁邊紙張的亮度），再平滑兩次
-  const dil = new Float32Array(gw * gh);
-  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
-    let m = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const xx = x + dx, yy = y + dy;
-      if (xx >= 0 && yy >= 0 && xx < gw && yy < gh) m = Math.max(m, grid[yy * gw + xx]);
-    }
-    dil[y * gw + x] = m;
-  }
-  let g = dil;
-  for (let pass = 0; pass < 2; pass++) {
-    const t = new Float32Array(gw * gh);
-    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
-      let sum = 0, cnt = 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx >= 0 && yy >= 0 && xx < gw && yy < gh) { sum += g[yy * gw + xx]; cnt++; }
-      }
-      t[y * gw + x] = sum / cnt;
-    }
-    g = t;
-  }
-  // 雙線性內插回全圖
+// 膨脹（把線條變粗）：方形最大值濾波
+function dilate(src, w, h, r) {
+  if (r < 1) return src;
+  const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);
+  const q = new Int32Array(Math.max(w, h));
+  for (let y = 0; y < h; y++) slideMax(src, tmp, y * w, 1, w, r, q);
+  for (let x = 0; x < w; x++) slideMax(tmp, out, x, w, h, r, q);
+  return out;
+}
+
+// 十字形（菱形）膨脹一格
+function cross(src, out, w, h) {
+  for (let y = 0, i = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, i++) {
+      let v = src[i];
+      if (x > 0 && src[i - 1] > v) v = src[i - 1];
+      if (x < w - 1 && src[i + 1] > v) v = src[i + 1];
+      if (y > 0 && src[i - w] > v) v = src[i - w];
+      if (y < h - 1 && src[i + w] > v) v = src[i + w];
+      out[i] = v;
+    }
+  }
+}
+
+// 接近圓形的膨脹：方形 + 菱形 = 八角形，線頭與轉角才會圓
+function dilateRound(src, w, h, r) {
+  const s = Math.round(r / 2.414);
+  const d = Math.round(r * 0.586);
+  let a = s > 0 ? dilate(src, w, h, s) : Float32Array.from(src);
+  if (d > 0) {
+    let b = new Float32Array(w * h);
+    for (let k = 0; k < d; k++) { cross(a, b, w, h); [a, b] = [b, a]; }
+  }
+  return a;
+}
+
+/* ---------------- 線稿提取 ----------------
+   自適應閾值：每個像素和周圍區域的平均亮度比較，
+   比周圍暗的部分視為線條，其餘（紙張、陰影、光線不均）變透明。 */
+
+// 回傳每個像素「比周圍暗多少」（0~1）
+export function lineDiff(data, w, h) {
+  const n = w * h;
+  // 灰階（若有透明則視為白紙）
+  const gray = new Float32Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const a = data[j + 3] / 255;
+    const g = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
+    gray[i] = g * a + 255 * (1 - a);
+  }
+  // 輕微模糊去除雜訊（3x3）
+  const soft = new Float32Array(n);
   for (let y = 0; y < h; y++) {
-    const fy = Math.min(gh - 1, Math.max(0, (y + 0.5) / cell - 0.5));
-    const y0 = Math.floor(fy), y1 = Math.min(gh - 1, y0 + 1), ty = fy - y0;
+    const y0 = Math.max(0, y - 1) * w, y1 = y * w, y2 = Math.min(h - 1, y + 1) * w;
     for (let x = 0; x < w; x++) {
-      const fx = Math.min(gw - 1, Math.max(0, (x + 0.5) / cell - 0.5));
-      const x0 = Math.floor(fx), x1 = Math.min(gw - 1, x0 + 1), tx = fx - x0;
-      const a = g[y0 * gw + x0] + (g[y0 * gw + x1] - g[y0 * gw + x0]) * tx;
-      const b = g[y1 * gw + x0] + (g[y1 * gw + x1] - g[y1 * gw + x0]) * tx;
-      out[y * w + x] = Math.max(60, a + (b - a) * ty);
+      const x0 = Math.max(0, x - 1), x2 = Math.min(w - 1, x + 1);
+      soft[y1 + x] = (
+        gray[y0 + x0] + gray[y0 + x] + gray[y0 + x2] +
+        gray[y1 + x0] + gray[y1 + x] * 2 + gray[y1 + x2] +
+        gray[y2 + x0] + gray[y2 + x] + gray[y2 + x2]
+      ) / 10;
+    }
+  }
+  // 積分圖求區域平均
+  const W = w + 1;
+  const integral = new Float64Array(W * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      row += gray[y * w + x];
+      integral[(y + 1) * W + x + 1] = integral[y * W + x + 1] + row;
+    }
+  }
+  const r = Math.max(8, Math.round(Math.min(w, h) / 30));
+  const diff = new Float32Array(n);
+  for (let y = 0; y < h; y++) {
+    const ya = Math.max(0, y - r), yb = Math.min(h - 1, y + r) + 1;
+    for (let x = 0; x < w; x++) {
+      const xa = Math.max(0, x - r), xb = Math.min(w - 1, x + r) + 1;
+      const sum = integral[yb * W + xb] - integral[ya * W + xb] - integral[yb * W + xa] + integral[ya * W + xa];
+      const mean = sum / ((xb - xa) * (yb - ya));
+      // 相對於周圍亮度的暗度，在亮紙上更敏感
+      diff[y * w + x] = (mean - soft[y * w + x]) / Math.max(40, mean);
+    }
+  }
+  return diff;
+}
+
+// 暗度 → 線條不透明度（0~255）。level 0=淡 1=濃
+export function lineAlpha(d, level) {
+  const t = 0.30 - level * 0.27;
+  const ramp = 0.10 + level * 0.06;
+  const a = (d - t) / ramp;
+  return a <= 0 ? 0 : a >= 1 ? 255 : Math.round(Math.sqrt(a) * 255);
+}
+
+// 取得線條遮罩（0~1）：線稿檔用透明度；照片先自動提取線條
+export function lineMask(imageData, isLineart) {
+  const { data, width: w, height: h } = imageData;
+  const n = w * h;
+  const m = new Float32Array(n);
+  if (isLineart) {
+    for (let i = 0; i < n; i++) m[i] = data[i * 4 + 3] / 255;
+  } else {
+    const diff = lineDiff(data, w, h);
+    for (let i = 0; i < n; i++) m[i] = lineAlpha(diff[i], 0.65) / 255;
+  }
+  return m;
+}
+
+/* ---------------- 風格 ---------------- */
+
+// 先把半透明的雜點收斂成明確的線（膨脹前用，避免淡雜點被放大）
+function solid(m) {
+  const out = new Float32Array(m.length);
+  for (let i = 0; i < m.length; i++) out[i] = smooth(0.18, 0.5, m[i]);
+  return out;
+}
+
+function put(o, j, rgb, a) {
+  o[j] = rgb[0]; o[j + 1] = rgb[1]; o[j + 2] = rgb[2];
+  o[j + 3] = a <= 0 ? 0 : a >= 1 ? 255 : Math.round(a * 255);
+}
+
+/* 素描：石墨色、筆壓不均、斜向鉛筆顆粒，再加一道淡淡的偏移副線，像手繪草稿 */
+function sketch(m, w, h, level, unit) {
+  const soft = gaussian(m, w, h, Math.round(unit * 0.4));
+  const off = Math.max(1, Math.round(unit * 1.8));
+  const ghostK = 0.15 + level * 0.25;
+  const dark = 0.95 + level * 0.5;
+  const out = new ImageData(w, h);
+  const o = out.data;
+  const GRAPHITE = [56, 56, 64];
+  for (let y = 0, i = 0; y < h; y++) {
+    const ys = Math.max(0, y - off) * w;
+    for (let x = 0; x < w; x++, i++) {
+      const ghost = soft[ys + Math.min(w - 1, x + off)] * ghostK;
+      let a = Math.max(soft[i], ghost);
+      if (a < 0.01) continue;
+      const press = 0.7 + 0.3 * valueNoise(x / (unit * 26), y / (unit * 26));
+      const grain = 0.6 + 0.4 * valueNoise((x + y) / (unit * 0.8), (x - y) / (unit * 3.2));
+      a *= press * grain * dark;
+      put(o, i * 4, GRAPHITE, a);
     }
   }
   return out;
 }
 
-/* ---------------- 素描 ----------------
-   經典鉛筆素描：灰階 + 反相模糊 + 色彩加亮（dodge），
-   再加上紙張色調與鉛筆顆粒。 */
-function sketch(src, level, unit) {
-  const { width: w, height: h, data } = src;
-  const n = w * h;
-  const gray = toGray(data, n);
-  const inv = new Float32Array(n);
-  for (let i = 0; i < n; i++) inv[i] = 255 - gray[i];
-  const blur = gaussian(inv, w, h, Math.max(1, Math.round(unit * (2 + level * 5))));
-  const light = paperLight(gray, w, h);
+/* 蠟筆：線條變粗，邊緣粗糙不規則，筆觸裡露出紙紋 */
+function crayon(m, w, h, level, unit) {
+  const r = Math.max(1, Math.round(unit * (1.2 + level * 3.3)));
+  const d = gaussian(dilateRound(solid(m), w, h, r), w, h, Math.max(1, Math.round(r * 0.5)));
   const out = new ImageData(w, h);
   const o = out.data;
-  const contrast = 1.2 + level * 1.8;
-  const period = Math.max(3, unit * 7);
+  const WAX = [42, 35, 31];
+  const rgb = [0, 0, 0];
   for (let y = 0, i = 0; y < h; y++) {
     for (let x = 0; x < w; x++, i++) {
-      let v = Math.min(255, (gray[i] * 255) / Math.max(1, 255 - blur[i]));
-      v = 255 - (255 - v) * contrast; // 加深線條
-      // 排線陰影：依「相對於紙張」的暗度，暗處畫斜線，更暗處再交叉
-      const tone = 1 - Math.min(1, gray[i] / Math.max(40, light[i] * 0.97));
-      if (tone > 0.12) {
-        const wob = valueNoise(x / (unit * 20), y / (unit * 20)) * 0.6;
-        const a = ((x + y) / period + wob) % 1;
-        const b = ((x - y + 1e6) / period + wob) % 1;
-        const w1 = smooth(0.12, 0.75, tone) * 0.55;
-        const w2 = smooth(0.4, 0.9, tone) * 0.5;
-        const ink = (a < w1 ? 1 : 0) * 0.5 + (b < w2 ? 1 : 0) * 0.45;
-        v *= 1 - ink * (0.45 + level * 0.4);
-      }
-      // 鉛筆顆粒：斜向細紋，只出現在有筆觸的地方
-      const grain = valueNoise((x + y) / (unit * 0.9), (x - y) / (unit * 3.5)) - 0.5;
-      v += grain * 40 * (1 - v / 255);
-      v = clamp(v) / 255;
-      const j = i * 4;
-      // 石墨偏冷灰，紙張偏暖白
-      o[j] = PAPER[0] * v + 38 * (1 - v);
-      o[j + 1] = PAPER[1] * v + 40 * (1 - v);
-      o[j + 2] = PAPER[2] * v + 46 * (1 - v);
-      o[j + 3] = 255;
+      if (d[i] < 0.05) continue;
+      // 粗糙邊緣：閾值隨位置變動
+      const t = 0.5 + (valueNoise(x / (unit * 1.7), y / (unit * 1.7)) - 0.5) * 0.6;
+      let a = smooth(t - 0.07, t + 0.07, d[i]);
+      if (a <= 0) continue;
+      // 蠟質紙紋：斜向條紋 + 細顆粒，高的地方露出紙
+      const streak = valueNoise((x + y) / (unit * 1.3), (x - y) / (unit * 7));
+      const tooth = hash((x / Math.max(1, unit * 0.7)) | 0, (y / Math.max(1, unit * 0.7)) | 0);
+      const tex = streak * 0.65 + tooth * 0.35;
+      a *= tex > 0.7 ? 0.12 : 0.95 - tex * 0.2;
+      const shade = (streak - 0.5) * 26;
+      rgb[0] = WAX[0] + shade; rgb[1] = WAX[1] + shade; rgb[2] = WAX[2] + shade;
+      put(o, i * 4, rgb, a);
     }
   }
   return out;
 }
 
-/* ---------------- 蠟筆 ----------------
-   色彩簡化 + 提高飽和度 + 蠟質斜向筆觸（紙紋露白）+ 邊緣加深 */
-function crayon(src, level, unit) {
-  const { width: w, height: h, data } = src;
-  const n = w * h;
-  const gray = toGray(data, n);
-  const light = paperLight(gray, w, h);
-  const soft = gaussian(gray, w, h, Math.max(1, Math.round(unit)));
+/* 麥克筆：粗一點、圓滑、實心的線條 */
+function marker(m, w, h, level, unit) {
+  const r = Math.max(1, Math.round(unit * (1.5 + level * 4)));
+  const d = gaussian(dilateRound(solid(m), w, h, r), w, h, Math.max(1, Math.round(r * 0.6)));
   const out = new ImageData(w, h);
   const o = out.data;
-  const steps = 6 - Math.round(level * 2); // 色階數：越強越簡化
-  const sat = 1.35 + level * 0.6;
-  const gap = 0.18 + level * 0.3; // 露白程度
-  const edgeK = 0.5 + level * 0.9;
-  const q = (v) => Math.round((v / 255) * (steps - 1)) * (255 / (steps - 1));
-  for (let y = 0, i = 0; y < h; y++) {
-    for (let x = 0; x < w; x++, i++) {
-      const j = i * 4;
-      // 攤平光線：紙張變白
-      const f = Math.min(3, 240 / Math.max(40, light[i]));
-      let r = clamp(data[j] * f), g = clamp(data[j + 1] * f), b = clamp(data[j + 2] * f);
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      // 只對真正有顏色的地方加飽和；紙張與鉛筆（低彩度）變中性
-      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-      const s2 = sat * smooth(12, 38, chroma);
-      // 色彩簡化：只量化亮度，保留色相，避免出現色帶
-      const dl = q(l) - l;
-      r = clamp(l + (r - l) * s2 + dl); g = clamp(l + (g - l) * s2 + dl); b = clamp(l + (b - l) * s2 + dl);
-      // 邊緣（Sobel）
-      const xa = x > 0 ? i - 1 : i, xb = x < w - 1 ? i + 1 : i;
-      const ya = y > 0 ? i - w : i, yb = y < h - 1 ? i + w : i;
-      const gx = soft[xb] - soft[xa], gy = soft[yb] - soft[ya];
-      const e = Math.min(1, Math.sqrt(gx * gx + gy * gy) / 60) * edgeK;
-      r *= 1 - e * 0.75; g *= 1 - e * 0.75; b *= 1 - e * 0.75;
-      // 蠟質筆觸：沿斜向拉長的雜訊 + 細顆粒，越亮的地方越容易露出紙張
-      const stroke = valueNoise((x + y) / (unit * 2.2), (x - y) / (unit * 14));
-      const fine = hash((x / Math.max(1, unit * 0.6)) | 0, (y / Math.max(1, unit * 0.6)) | 0);
-      const t = stroke * 0.7 + fine * 0.3;
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-      const showPaper = t > 1 - gap * (0.4 + lum) ? 0.85 : 0;
-      // 顏色印在紙上（白 → 紙色）
-      r *= PAPER[0] / 255; g *= PAPER[1] / 255; b *= PAPER[2] / 255;
-      o[j] = r + (PAPER[0] - r) * showPaper;
-      o[j + 1] = g + (PAPER[1] - g) * showPaper;
-      o[j + 2] = b + (PAPER[2] - b) * showPaper;
-      o[j + 3] = 255;
-    }
+  const INK = [17, 17, 20];
+  for (let i = 0; i < d.length; i++) {
+    if (d[i] < 0.3) continue;
+    put(o, i * 4, INK, smooth(0.42, 0.58, d[i]));
   }
   return out;
 }
 
-/* ---------------- 浮雕 ----------------
-   以左上方光源計算高低差，呈現石膏 / 石雕質感 */
-function emboss(src, level, unit) {
-  const { width: w, height: h, data } = src;
-  const n = w * h;
-  const gray = toGray(data, n);
-  const { lo, k } = levels(gray, n);
-  for (let i = 0; i < n; i++) gray[i] = clamp((gray[i] - lo) * k);
-  const g = gaussian(gray, w, h, Math.max(1, Math.round(unit * 0.8)));
-  const d = Math.max(1, Math.round(unit * 1.5));
-  const depth = 1.2 + level * 4.5;
+/* 浮雕：線條變成凸起的石膏條，左上受光、右下有陰影 */
+function emboss(m, w, h, level, unit) {
+  const r = Math.max(1, Math.round(unit * (0.8 + level * 1.8)));
+  const body = gaussian(dilateRound(solid(m), w, h, r), w, h, Math.max(1, Math.round(unit * 1.2)));
+  const so = Math.max(1, Math.round(unit * (1.5 + level * 2)));
+  const shadow = gaussian(body, w, h, Math.max(1, Math.round(unit * 1.6)));
+  const d = Math.max(1, Math.round(unit * 1.2));
+  const depth = 140 + level * 120;
   const out = new ImageData(w, h);
   const o = out.data;
+  const rgb = [0, 0, 0];
   for (let y = 0, i = 0; y < h; y++) {
-    const ya = Math.max(0, y - d) * w, yb = Math.min(h - 1, y + d) * w;
+    const ya = Math.max(0, y - d) * w, yb = Math.min(h - 1, y + d) * w, ys = Math.max(0, y - so) * w;
     for (let x = 0; x < w; x++, i++) {
+      const b = smooth(0.25, 0.5, body[i]);
+      const sh = shadow[ys + Math.max(0, x - so)] * 0.45;
+      const a = b + (1 - b) * sh;
+      if (a < 0.01) continue;
+      // 左上受光：高度往右下增加的邊緣（線條的左上側）較亮
       const xa = Math.max(0, x - d), xb = Math.min(w - 1, x + d);
-      // 暗的筆觸視為凸起：左上亮、右下暗
-      let v = 168 + (g[yb + xb] - g[ya + xa]) * depth;
-      // 細微石材顆粒
-      v += (hash(x, y) - 0.5) * 10;
-      v = clamp(v);
-      const j = i * 4;
-      o[j] = clamp(v * 1.02);
-      o[j + 1] = clamp(v * 0.99);
-      o[j + 2] = clamp(v * 0.93);
-      o[j + 3] = 255;
+      const slope = body[yb + xb] - body[ya + xa];
+      const lum = Math.min(255, Math.max(40, 160 + slope * depth));
+      // 陰影是黑色，混合後換算成非預乘顏色
+      const k = b / a;
+      rgb[0] = lum * 1.02 * k; rgb[1] = lum * 0.99 * k; rgb[2] = lum * 0.93 * k;
+      put(o, i * 4, rgb, a);
     }
   }
   return out;
 }
 
-export const STYLES = { sketch, crayon, emboss };
+export const STYLES = { sketch, crayon, marker, emboss };
 
-// unit：以 1200px 為基準的縮放倍數
-export function applyStyle(imageData, style, level) {
-  const unit = Math.max(imageData.width, imageData.height) / 1200;
-  return STYLES[style](imageData, level, Math.max(0.35, unit));
+// mask：lineMask() 的結果
+export function applyStyle(mask, w, h, style, level) {
+  const unit = Math.max(0.35, Math.max(w, h) / 1200);
+  return STYLES[style](mask, w, h, level, unit);
 }
