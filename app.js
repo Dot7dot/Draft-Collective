@@ -132,6 +132,7 @@ function setView(name) {
   if (prev === 'crop' && name !== 'crop') releaseCrop();
   if (prev === 'lineart' && name !== 'lineart') releaseLine();
   if (prev === 'style' && name !== 'style') releaseStyle();
+  if (prev === 'eraser' && name !== 'eraser') releaseEraser();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === name));
   const theme = document.querySelector('meta[name="theme-color"]');
   const dark = $(name).classList.contains('dark');
@@ -405,6 +406,7 @@ function step(dir) {
 window.addEventListener('resize', () => {
   if (currentView === 'viewer') { resetZoom(); }
   if (currentView === 'crop') layoutCrop(true);
+  if (currentView === 'eraser') layoutEraser();
 });
 
 /* ---------- 分享 / 儲存 ---------- */
@@ -811,6 +813,290 @@ $('lineOk').addEventListener('click', async () => {
   back(); // 返回時 setView 會呼叫 releaseLine()
   toast();
 });
+
+/* =========================================================
+   橡皮擦
+   單指擦除、雙指縮放移動；記錄每一筆，復原時從原圖重畫。
+   線稿（透明 PNG）擦成透明；照片擦成附近的紙張顏色。
+   ========================================================= */
+const eraseStage = $('eraseStage');
+const eraseWrap = $('eraseWrap');
+const eraseCanvas = $('eraseCanvas');
+const brushEl = $('brush');
+const er = {
+  img: null, transparent: false, paper: null, pattern: null,
+  strokes: [], cur: null,
+  fit: 1, ox: 0, oy: 0, z: 1, px: 0, py: 0, dw: 0, dh: 0,
+};
+const brushPx = () => Number($('eraseSize').value); // 螢幕上的直徑
+
+$('tErase').addEventListener('click', async () => {
+  const rec = current();
+  if (!rec) return;
+  busy(true);
+  await nextFrame();
+  try {
+    const img = await loadImage(rec.image);
+    eraseCanvas.width = img.naturalWidth;
+    eraseCanvas.height = img.naturalHeight;
+    const ctx = ctx2d(eraseCanvas);
+    ctx.drawImage(img, 0, 0);
+    er.img = img;
+    er.transparent = rec.kind === 'lineart';
+    er.strokes = [];
+    er.cur = null;
+    if (!er.transparent) {
+      er.paper = paperCanvas(img);
+      er.pattern = ctx.createPattern(er.paper, 'no-repeat');
+      er.pattern.setTransform(new DOMMatrix().scale(img.naturalWidth / er.paper.width, img.naturalHeight / er.paper.height));
+    }
+    updateUndo();
+    go('eraser');
+    layoutEraser();
+  } catch (err) {
+    console.error(err);
+    releaseEraser();
+  } finally {
+    busy(false);
+  }
+});
+
+// 估計每個位置的紙張顏色：縮成小圖，每點取附近最亮的顏色（把線條「撐」掉）
+function paperCanvas(img) {
+  const k = 20;
+  const sw = Math.max(2, Math.round(img.naturalWidth / k));
+  const sh = Math.max(2, Math.round(img.naturalHeight / k));
+  const c = document.createElement('canvas');
+  c.width = sw;
+  c.height = sh;
+  const ctx = ctx2d(c);
+  ctx.drawImage(img, 0, 0, sw, sh);
+  const src = ctx.getImageData(0, 0, sw, sh);
+  const out = ctx.createImageData(sw, sh);
+  const s = src.data, o = out.data, R = 2;
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      let best = -1, bi = 0;
+      for (let dy = -R; dy <= R; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= sh) continue;
+        for (let dx = -R; dx <= R; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= sw) continue;
+          const j = (yy * sw + xx) * 4;
+          const l = s[j] * 0.299 + s[j + 1] * 0.587 + s[j + 2] * 0.114;
+          if (l > best) { best = l; bi = j; }
+        }
+      }
+      const j = (y * sw + x) * 4;
+      o[j] = s[bi]; o[j + 1] = s[bi + 1]; o[j + 2] = s[bi + 2]; o[j + 3] = 255;
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+  return c;
+}
+
+function layoutEraser() {
+  if (!er.img) return;
+  const W = eraseStage.clientWidth, H = eraseStage.clientHeight;
+  const cw = eraseCanvas.width, ch = eraseCanvas.height;
+  er.fit = Math.min((W - 24) / cw, (H - 24) / ch);
+  er.dw = cw * er.fit;
+  er.dh = ch * er.fit;
+  er.ox = (W - er.dw) / 2;
+  er.oy = (H - er.dh) / 2;
+  er.z = 1; er.px = 0; er.py = 0;
+  eraseWrap.style.width = er.dw + 'px';
+  eraseWrap.style.height = er.dh + 'px';
+  applyEraseView();
+}
+
+function applyEraseView() {
+  eraseWrap.style.transform = `translate(${er.ox + er.px}px, ${er.oy + er.py}px) scale(${er.z})`;
+}
+
+// 螢幕座標（相對於 stage）→ 圖片座標
+function toImage(p) {
+  const k = er.z * er.fit;
+  return { x: (p.x - er.ox - er.px) / k, y: (p.y - er.oy - er.py) / k };
+}
+
+function paint(ctx, stroke, from = 0) {
+  const pts = stroke.pts;
+  ctx.save();
+  if (er.transparent) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.strokeStyle = ctx.fillStyle = '#000';
+  } else {
+    ctx.strokeStyle = ctx.fillStyle = er.pattern;
+  }
+  ctx.lineWidth = stroke.r * 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (pts.length === 1) {
+    ctx.beginPath();
+    ctx.arc(pts[0].x, pts[0].y, stroke.r, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    const a = Math.max(0, from - 1);
+    ctx.moveTo(pts[a].x, pts[a].y);
+    for (let i = a + 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function redrawEraser() {
+  const ctx = ctx2d(eraseCanvas);
+  ctx.clearRect(0, 0, eraseCanvas.width, eraseCanvas.height);
+  ctx.drawImage(er.img, 0, 0);
+  er.strokes.forEach((s) => paint(ctx, s));
+}
+
+function updateUndo() {
+  $('eraseUndo').disabled = er.strokes.length === 0;
+}
+
+function showBrush(p, size) {
+  brushEl.hidden = false;
+  brushEl.style.width = brushEl.style.height = size + 'px';
+  brushEl.style.transform = `translate(${p.x - size / 2}px, ${p.y - size / 2}px)`;
+}
+let brushTimer = 0;
+function hideBrush(delay = 0) {
+  clearTimeout(brushTimer);
+  brushTimer = setTimeout(() => { brushEl.hidden = true; }, delay);
+}
+
+(() => {
+  const pts = new Map();
+  let pinch = null;
+  let locked = false; // 雙指手勢後，直到全部放開前不擦
+  const local = (e) => {
+    const r = eraseStage.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  eraseStage.addEventListener('pointerdown', (e) => {
+    if (!er.img) return;
+    eraseStage.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, local(e));
+    if (pts.size === 1 && !locked) {
+      const p = local(e);
+      const ip = toImage(p);
+      er.cur = { r: brushPx() / 2 / (er.z * er.fit), pts: [ip], t: Date.now() };
+      paint(ctx2d(eraseCanvas), er.cur);
+      clearTimeout(brushTimer);
+      showBrush(p, brushPx());
+    } else if (pts.size === 2) {
+      // 雙指：取消剛開始的那一筆，改成縮放
+      if (er.cur) {
+        if (er.cur.pts.length < 6 && Date.now() - er.cur.t < 300) {
+          er.cur = null;
+          redrawEraser();
+        } else {
+          er.strokes.push(er.cur);
+          er.cur = null;
+          updateUndo();
+        }
+      }
+      hideBrush();
+      locked = true;
+      const [a, b] = [...pts.values()];
+      pinch = {
+        d: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+        mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2,
+        z: er.z, px: er.px, py: er.py,
+      };
+    }
+  });
+
+  eraseStage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const p = local(e);
+    pts.set(e.pointerId, p);
+    if (pinch && pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const z = Math.min(8, Math.max(1, pinch.z * (d / pinch.d)));
+      // 讓雙指中心點下的位置保持不動
+      const bx = er.ox + pinch.px, by = er.oy + pinch.py;
+      const nbx = mx - (pinch.mx - bx) * (z / pinch.z);
+      const nby = my - (pinch.my - by) * (z / pinch.z);
+      er.z = z;
+      er.px = nbx - er.ox;
+      er.py = nby - er.oy;
+      applyEraseView();
+    } else if (er.cur) {
+      er.cur.pts.push(toImage(p));
+      paint(ctx2d(eraseCanvas), er.cur, er.cur.pts.length - 1);
+      showBrush(p, brushPx());
+    }
+  });
+
+  const end = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (er.cur && pts.size === 0) {
+      er.strokes.push(er.cur);
+      er.cur = null;
+      updateUndo();
+    }
+    if (pts.size === 0) {
+      locked = false;
+      if (er.z < 1.03) { er.z = 1; er.px = 0; er.py = 0; applyEraseView(); }
+      hideBrush(120);
+    }
+  };
+  eraseStage.addEventListener('pointerup', end);
+  eraseStage.addEventListener('pointercancel', end);
+})();
+
+$('eraseSize').addEventListener('input', () => {
+  // 在畫面中央預覽筆刷大小
+  showBrush({ x: eraseStage.clientWidth / 2, y: eraseStage.clientHeight / 2 }, brushPx());
+  hideBrush(700);
+});
+
+$('eraseUndo').addEventListener('click', () => {
+  if (!er.strokes.length) return;
+  er.strokes.pop();
+  redrawEraser();
+  updateUndo();
+});
+
+$('eraseOk').addEventListener('click', async () => {
+  const rec = current();
+  if (!rec || !er.img) return;
+  if (!er.strokes.length) { back(); return; }
+  busy(true);
+  await nextFrame();
+  try {
+    Object.assign(rec, await encodeRecord(eraseCanvas, rec.kind), { updated: Date.now() });
+    await db.put(rec);
+  } catch (err) {
+    console.error(err);
+    busy(false);
+    return;
+  }
+  busy(false);
+  back(); // 返回時 setView 會呼叫 releaseEraser()
+  toast();
+});
+
+function releaseEraser() {
+  er.img = null;
+  er.pattern = null;
+  releaseCanvas(er.paper);
+  er.paper = null;
+  er.strokes = [];
+  er.cur = null;
+  brushEl.hidden = true;
+  releaseCanvas(eraseCanvas);
+}
 
 /* =========================================================
    風格：素描 / 蠟筆 / 浮雕

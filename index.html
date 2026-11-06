@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="stylesheet" href="style.css?v=1.4">
+  <link rel="stylesheet" href="style.css?v=1.5">
 </head>
 <body>
   <!-- 幾何圖示 -->
@@ -79,6 +79,17 @@
       <symbol id="i-dark" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="5" fill="currentColor"/>
       </symbol>
+      <symbol id="i-eraser" viewBox="0 0 24 24">
+        <g transform="rotate(-40 12 11)">
+          <rect x="4" y="7" width="16" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="4" y="7" width="6.5" height="8" rx="1.6" fill="currentColor"/>
+        </g>
+        <path d="M4 21h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24">
+        <path d="M5.5 10.5h9a5 5 0 0 1 0 10H9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M9.5 5.5 4 10.5l5.5 5z" fill="currentColor"/>
+      </symbol>
       <symbol id="i-light" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="9" fill="currentColor"/>
       </symbol>
@@ -105,7 +116,7 @@
     <footer class="home-notes">
       <p><i>1</i><span>請使用瀏覽器開啟保持穩定性</span></p>
       <p><i>2</i><span>資料穩定性還在設計中，若是有寶貴的線稿建議立即儲存至手機</span></p>
-      <small class="ver">v1.4</small>
+      <small class="ver">v1.5</small>
     </footer>
   </section>
 
@@ -134,6 +145,7 @@
     </div>
     <nav class="toolbar labeled">
       <button class="icon-btn" id="tCrop"><svg aria-hidden="true"><use href="#i-crop"/></svg><span class="lbl">剪裁</span></button>
+      <button class="icon-btn" id="tErase"><svg aria-hidden="true"><use href="#i-eraser"/></svg><span class="lbl">橡皮擦</span></button>
       <button class="icon-btn" id="tLine"><svg aria-hidden="true"><use href="#i-line"/></svg><span class="lbl">線稿</span></button>
       <button class="icon-btn" id="tStyle"><svg aria-hidden="true"><use href="#i-star"/></svg><span class="lbl">風格</span></button>
       <button class="icon-btn" id="tNote"><svg aria-hidden="true"><use href="#i-note"/></svg><span class="lbl">筆記</span><i class="dot" id="noteDot" hidden></i></button>
@@ -198,6 +210,24 @@
     </nav>
   </section>
 
+  <!-- 橡皮擦 -->
+  <section id="eraser" class="view dark">
+    <div class="stage erase-stage" id="eraseStage">
+      <div class="erase-wrap" id="eraseWrap"><canvas id="eraseCanvas"></canvas></div>
+      <div class="brush" id="brush" hidden></div>
+    </div>
+    <div class="slider-row">
+      <svg class="mini" aria-hidden="true"><use href="#i-dark"/></svg>
+      <input type="range" id="eraseSize" min="6" max="90" value="28" aria-label="橡皮擦大小">
+      <svg class="mini big" aria-hidden="true"><use href="#i-light"/></svg>
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" data-back aria-label="取消"><svg><use href="#i-x"/></svg></button>
+      <button class="icon-btn" id="eraseUndo" aria-label="復原"><svg><use href="#i-undo"/></svg></button>
+      <button class="icon-btn ok" id="eraseOk" aria-label="完成"><svg><use href="#i-check"/></svg></button>
+    </nav>
+  </section>
+
   <!-- 筆記 -->
   <section id="note" class="view">
     <header class="bar">
@@ -222,6 +252,6 @@
   <div class="toast" id="toast" aria-live="polite"><svg><use href="#i-check"/></svg></div>
   <div class="busy" id="busy" hidden><i></i></div>
 
-  <script type="module" src="app.js?v=1.4"></script>
+  <script type="module" src="app.js?v=1.5"></script>
 </body>
 </html>
