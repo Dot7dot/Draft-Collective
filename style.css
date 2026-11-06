@@ -79,11 +79,15 @@ svg { display: block; }
 .icon-btn svg { width: 26px; height: 26px; }
 .icon-btn:active { transform: scale(.9); background: rgba(127,127,127,.18); }
 .icon-btn.ghost { visibility: hidden; }
+.icon-btn:disabled { opacity: .3; pointer-events: none; }
 .icon-btn.ok { color: var(--accent); }
 .icon-btn.danger { color: var(--accent); }
 .icon-btn.solid { background: var(--accent); color: #fff; }
+.toolbar.labeled { padding-left: 4px; padding-right: 4px; }
 .toolbar.labeled .icon-btn {
-  width: 54px;
+  flex: 1 1 0;
+  width: auto;
+  max-width: 58px;
   height: 58px;
   border-radius: 16px;
   display: flex;
@@ -322,7 +326,7 @@ svg { display: block; }
 
 /* ---------- 剪裁 ---------- */
 #cropStage { padding: calc(24px + var(--safe-t)) 24px 16px; }
-.crop-box { position: relative; }
+.crop-box { position: relative; background: #fff; } /* 去背線稿的透明處顯示白底 */
 #cropImg {
   position: absolute;
   left: 50%;
@@ -394,6 +398,26 @@ svg { display: block; }
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 .chip:active { transform: scale(.95); }
+
+/* ---------- 橡皮擦 ---------- */
+.erase-stage { display: block; }
+.erase-wrap {
+  position: absolute;
+  left: 0; top: 0;
+  transform-origin: 0 0;
+  background-color: #fff;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+}
+.erase-wrap canvas { display: block; width: 100%; height: 100%; }
+.brush {
+  position: absolute;
+  left: 0; top: 0;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.35);
+  pointer-events: none;
+}
+.brush[hidden] { display: none; }
 
 .slider-row {
   flex: none;
