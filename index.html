@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="stylesheet" href="style.css?v=1.6">
+  <link rel="stylesheet" href="style.css?v=1.7">
 </head>
 <body>
   <!-- 幾何圖示 -->
@@ -119,7 +119,7 @@
     <footer class="home-notes">
       <p><i>1</i><span>請使用瀏覽器開啟保持穩定性</span></p>
       <p><i>2</i><span>資料穩定性還在設計中，若是有寶貴的線稿建議立即儲存至手機</span></p>
-      <small class="ver">v1.6</small>
+      <small class="ver">v1.7</small>
     </footer>
   </section>
 
@@ -152,7 +152,7 @@
       <button class="icon-btn" id="tLine"><svg aria-hidden="true"><use href="#i-line"/></svg><span class="lbl">線稿</span></button>
       <button class="icon-btn" id="tStyle"><svg aria-hidden="true"><use href="#i-star"/></svg><span class="lbl">風格</span></button>
       <button class="icon-btn" id="tNote"><svg aria-hidden="true"><use href="#i-note"/></svg><span class="lbl">筆記</span><i class="dot" id="noteDot" hidden></i></button>
-      <button class="icon-btn" id="tShare"><svg aria-hidden="true"><use href="#i-share"/></svg><span class="lbl">儲存</span></button>
+      <button class="icon-btn" id="tShare"><svg aria-hidden="true"><use href="#i-share"/></svg><span class="lbl">輸出</span></button>
       <button class="icon-btn danger" id="tDelete"><svg aria-hidden="true"><use href="#i-trash"/></svg><span class="lbl">刪除</span></button>
     </nav>
   </section>
@@ -232,6 +232,37 @@
     </nav>
   </section>
 
+  <!-- 輸出 -->
+  <section id="export" class="view dark">
+    <div class="stage" id="exportStage">
+      <div class="export-box" id="exportBox"><img id="exportImg" alt="" draggable="false"></div>
+    </div>
+    <div class="opt-row">
+      <span class="opt-lbl">格式</span>
+      <div class="segs" id="exportFormat">
+        <button class="seg" data-format="png">PNG</button>
+        <button class="seg" data-format="jpg">JPG</button>
+      </div>
+    </div>
+    <div class="opt-row" id="exportBgRow">
+      <span class="opt-lbl">底色</span>
+      <div class="swatches">
+        <button class="sw sw-none" data-bg="none" aria-label="透明"></button>
+        <button class="sw" data-bg="#ffffff" style="--c:#ffffff" aria-label="白"></button>
+        <button class="sw" data-bg="#f3efe6" style="--c:#f3efe6" aria-label="米白"></button>
+        <button class="sw" data-bg="#d9d9d9" style="--c:#d9d9d9" aria-label="淺灰"></button>
+        <button class="sw" data-bg="#1b1a17" style="--c:#1b1a17" aria-label="黑"></button>
+        <label class="sw sw-custom" id="exportCustom" data-bg="custom" aria-label="自訂顏色">
+          <input type="color" id="exportColor" value="#ffffff">
+        </label>
+      </div>
+    </div>
+    <nav class="toolbar">
+      <button class="icon-btn" data-back aria-label="取消"><svg><use href="#i-x"/></svg></button>
+      <button class="icon-btn ok" id="exportOk" aria-label="輸出"><svg><use href="#i-share"/></svg></button>
+    </nav>
+  </section>
+
   <!-- 筆記 -->
   <section id="note" class="view">
     <header class="bar">
@@ -256,6 +287,6 @@
   <div class="toast" id="toast" aria-live="polite"><svg><use href="#i-check"/></svg></div>
   <div class="busy" id="busy" hidden><i></i></div>
 
-  <script type="module" src="app.js?v=1.6"></script>
+  <script type="module" src="app.js?v=1.7"></script>
 </body>
 </html>

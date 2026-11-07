@@ -133,6 +133,7 @@ function setView(name) {
   if (prev === 'lineart' && name !== 'lineart') releaseLine();
   if (prev === 'style' && name !== 'style') releaseStyle();
   if (prev === 'eraser' && name !== 'eraser') releaseEraser();
+  if (prev === 'export' && name !== 'export') releaseExport();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === name));
   const theme = document.querySelector('meta[name="theme-color"]');
   const dark = $(name).classList.contains('dark');
@@ -407,33 +408,169 @@ window.addEventListener('resize', () => {
   if (currentView === 'viewer') { resetZoom(); }
   if (currentView === 'crop') layoutCrop(true);
   if (currentView === 'eraser') layoutEraser();
+  if (currentView === 'export') layoutExport();
 });
 
-/* ---------- 分享 / 儲存 ---------- */
-$('tShare').addEventListener('click', async () => {
-  const rec = current();
-  if (!rec) return;
-  const ext = rec.kind === 'lineart' ? 'png' : 'jpg';
+/* ---------- 輸出 ----------
+   選擇 PNG / JPG 與底色（無 / 預設色 / 自訂色）。
+   iOS Safari 只允許在點擊的當下開啟分享選單，所以設定一改就先在背景把檔案準備好，
+   按下輸出時立刻分享。 */
+const exp = { format: 'png', bg: null, file: null, token: 0, timer: 0 };
+try {
+  const saved = JSON.parse(localStorage.getItem('dc-export') || '{}');
+  if (saved.format === 'png' || saved.format === 'jpg') exp.format = saved.format;
+  if (saved.bg === null || /^#[0-9a-f]{6}$/i.test(saved.bg || '')) exp.bg = saved.bg ?? null;
+} catch { /* 無痕模式等情況讀不到也沒關係 */ }
+const saveExportPrefs = () => {
+  try { localStorage.setItem('dc-export', JSON.stringify({ format: exp.format, bg: exp.bg })); } catch { /* 忽略 */ }
+};
+
+const hasAlpha = (rec) => rec.kind === 'lineart';
+// 實際使用的底色：只有透明的線稿需要；JPG 不支援透明，沒選底色時用白色
+function exportBg(rec) {
+  if (!hasAlpha(rec)) return null;
+  if (exp.bg) return exp.bg;
+  return exp.format === 'jpg' ? '#ffffff' : null;
+}
+
+function exportName(rec) {
   const d = new Date(rec.created);
   const pad = (n) => String(n).padStart(2, '0');
-  const name = `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${rec.style ? '-' + rec.style : rec.kind === 'lineart' ? '-line' : ''}.${ext}`;
-  const file = new File([rec.image], name, { type: rec.image.type });
+  const tag = rec.style ? '-' + rec.style : rec.kind === 'lineart' ? '-line' : '';
+  return `draft-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${tag}.${exp.format}`;
+}
+
+$('tShare').addEventListener('click', () => {
+  const rec = current();
+  if (!rec || !state.viewURL) return;
+  const img = $('exportImg');
+  img.onload = () => layoutExport();
+  img.src = state.viewURL;
+  $('exportBgRow').hidden = !hasAlpha(rec);
+  go('export');
+  renderExportUI();
+  if (img.complete && img.naturalWidth) layoutExport();
+});
+
+function layoutExport() {
+  const img = $('exportImg');
+  if (!img.naturalWidth) return;
+  const stage = $('exportStage');
+  const aw = stage.clientWidth - 40, ah = stage.clientHeight - 40;
+  const k = Math.min(aw / img.naturalWidth, ah / img.naturalHeight);
+  const box = $('exportBox');
+  box.style.width = Math.round(img.naturalWidth * k) + 'px';
+  box.style.height = Math.round(img.naturalHeight * k) + 'px';
+}
+
+function renderExportUI() {
+  const rec = current();
+  if (!rec) return;
+  document.querySelectorAll('#exportFormat .seg').forEach((b) => b.classList.toggle('on', b.dataset.format === exp.format));
+  const bg = exportBg(rec);
+  document.querySelectorAll('#exportBgRow .sw').forEach((b) => {
+    const v = b.dataset.bg;
+    const on = v === 'none' ? bg === null : v === 'custom' ? !!bg && !b.parentElement.querySelector(`.sw[data-bg="${bg}"]`) : v === bg;
+    b.classList.toggle('on', on);
+    if (v === 'none') b.disabled = exp.format === 'jpg'; // JPG 沒有透明
+  });
+  if (exp.bg) $('exportColor').value = exp.bg;
+  $('exportCustom').style.setProperty('--c', exp.bg || '#ffffff');
+  const box = $('exportBox');
+  box.classList.toggle('checker', !bg);
+  box.style.backgroundColor = bg || '';
+  prepareExport();
+}
+
+// 在背景產生輸出檔（設定變更時重新產生）
+function prepareExport() {
+  exp.file = null;
+  const token = ++exp.token;
+  clearTimeout(exp.timer);
+  exp.timer = setTimeout(async () => {
+    const rec = current();
+    if (!rec || currentView !== 'export') return;
+    let c = null;
+    try {
+      const img = await loadImage(rec.image);
+      if (token !== exp.token) return;
+      const type = exp.format === 'jpg' ? 'image/jpeg' : 'image/png';
+      c = drawScaled(img, Infinity, exportBg(rec));
+      const blob = await toBlob(c, type, 0.92);
+      if (token !== exp.token) return;
+      exp.file = new File([blob], exportName(rec), { type });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      releaseCanvas(c);
+    }
+  }, 120);
+}
+
+async function shareFile(file, text) {
   try {
     if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], text: rec.note || undefined });
-      return;
+      await navigator.share({ files: [file], text: text || undefined });
+      return true;
     }
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return true;
+    // 其他錯誤（例如超過點擊時效）改用下載
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file);
-  a.download = name;
+  a.download = file.name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
+}
+
+$('exportFormat').addEventListener('click', (e) => {
+  const b = e.target.closest('.seg');
+  if (!b || b.dataset.format === exp.format) return;
+  exp.format = b.dataset.format;
+  saveExportPrefs();
+  renderExportUI();
 });
+
+$('exportBgRow').addEventListener('click', (e) => {
+  const b = e.target.closest('.sw');
+  if (!b || b.disabled) return;
+  const v = b.dataset.bg;
+  if (v === 'custom') return; // 由顏色選擇器處理
+  exp.bg = v === 'none' ? null : v;
+  saveExportPrefs();
+  renderExportUI();
+});
+
+$('exportColor').addEventListener('input', (e) => {
+  exp.bg = e.target.value.toLowerCase();
+  saveExportPrefs();
+  renderExportUI();
+});
+
+$('exportOk').addEventListener('click', async () => {
+  const rec = current();
+  if (!rec) return;
+  if (!exp.file) {
+    // 還沒準備好（很少見）：等一下再分享
+    busy(true);
+    const t0 = Date.now();
+    while (!exp.file && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 60));
+    busy(false);
+    if (!exp.file) return;
+  }
+  await shareFile(exp.file, rec.note);
+});
+
+function releaseExport() {
+  clearTimeout(exp.timer);
+  exp.token++;
+  exp.file = null;
+  $('exportImg').removeAttribute('src'); // 圖片網址屬於檢視畫面，不在這裡回收
+}
 
 /* ---------- 刪除 ---------- */
 let confirmURL = null;
